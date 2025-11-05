@@ -10,7 +10,7 @@ class Manager(Tk):
         self.configure(bg="#c6d9e3")
         self.geometry("800x400+120+20")
 
-        self.container = Frame(self, bg="#F04840")
+        self.container = Frame(self, bg="#F44D44")
         self.container.pack(fill="both", expand=True)
 
         self.frames = {
