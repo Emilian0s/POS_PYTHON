@@ -52,7 +52,7 @@ class Inventario(tk.Frame):
         frame1 = tk.Frame(self, bg="#dddddd", highlightbackground="gray", highlightthickness=1)
         frame1.place(x=0, y=0, width=1100, height=100)
     
-        titulo = tk.Label(self, text="INVENTARIOS", bg="#dddddd", font="sans 30 bold", anchor="center")
+        titulo = tk.Label(self, text="INVENTARIOS", bg="#dddddd", font="sans 30 bold")
         titulo.place(x=5, y=0, width=1090, height=90)
     
         frame2 = tk.Frame(self, bg="#c6d9e3", highlightbackground="gray", highlightthickness=1)
@@ -120,7 +120,8 @@ class Inventario(tk.Frame):
             xscrollcommand=scrol_x.set,
             height=40,
             columns=("ID", "CODIGO", "PRODUCTO","PROVEEDOR", "PRECIO", "COSTO", "STOCK"),
-            show="headings"
+            show="headings",
+            selectmode="extended"   # ← AQUÍ
         )
     
         scrol_y.config(command=self.tre.yview)
@@ -148,18 +149,19 @@ class Inventario(tk.Frame):
     
         # Contenedor para botones de inventario
         frame_botones = Frame(frame2, bg="#c6d9e3")
-        frame_botones.place(x=440, y=480, width=600, height=50)
+        frame_botones.place(x=440, y=480, width=700, height=50)
     
-        btn_actualizar = Button(frame_botones, text="Actualizar Inventario", font="sans 14 bold", command=self.actualizar_inventario)
-        btn_actualizar.pack(side=LEFT, padx=10, pady=5, ipadx=20, ipady=5)
+        btn_actualizar = Button(frame_botones, text="Actualizar", font="sans 14 bold", command=self.actualizar_inventario)
+        btn_actualizar.pack(side=LEFT, padx=6, pady=5, ipadx=10, ipady=5)
     
         btn_prueba = Button(frame_botones, text="Prueba", font="sans 14 bold", command=self.generar_datos_prueba)
-        btn_prueba.pack(side=LEFT, padx=10, pady=5, ipadx=20, ipady=5)
+        btn_prueba.pack(side=LEFT, padx=6, pady=5, ipadx=10, ipady=5)
+        
+        btn_eliminar_seleccion = Button(frame_botones, text="Eliminar seleccion", font="sans 14 bold", command=self.eliminar_registros)
+        btn_eliminar_seleccion.pack(side=LEFT, padx=6, pady=5, ipadx=5, ipady=5)
     
         btn_eliminar = Button(frame_botones, text="Eliminar todos", font="sans 14 bold", command=self.eliminar_todos_los_datos)
-        btn_eliminar.pack(side=LEFT, padx=10, pady=5, ipadx=20, ipady=5)
-
-
+        btn_eliminar.pack(side=LEFT, padx=6, pady=5, ipadx=10, ipady=10)
 
     def eje_consulta(self, consulta, parametros=()):
         conn = obtener_conexion()  # siempre la DB correcta
@@ -170,7 +172,6 @@ class Inventario(tk.Frame):
         conn.close()
         return filas
     
-
     def validacion(self, nombre, prov, precio, costo, stock):
         if not (nombre and prov and precio and costo and stock):
             return False
@@ -207,7 +208,6 @@ class Inventario(tk.Frame):
                     elem[6]         # Stock
                 )
             )
-
 
     def actualizar_inventario(self):
         for item in self.tre.get_children():
@@ -299,11 +299,107 @@ class Inventario(tk.Frame):
     
             if confirmacion:
                 self.eje_consulta("DELETE FROM inventario")
+                # resetear sqlite_sequence para que el próximo id empiece desde 1
+                conn = sqlite3.connect(self.db_name)
+                cur = conn.cursor()
+                try:
+                    cur.execute("DELETE FROM sqlite_sequence WHERE name = ?", ("inventario",))
+                    conn.commit()
+                finally:
+                    conn.close()
+
                 self.actualizar_inventario()
                 messagebox.showinfo("Eliminar", "Se eliminaron todos los productos ✅")
     
         except Exception as e:
             messagebox.showerror("Error", f"No se pudieron eliminar datos: {e}")
+
+    def eliminar_registros(self):
+        seleccion = self.tre.selection()
+
+        if not seleccion:
+            messagebox.showwarning("Eliminar", "No hay registros seleccionados.")
+            return
+
+        confirmar = messagebox.askyesno(
+            "Confirmar eliminación",
+            f"¿Eliminar {len(seleccion)} registro(s) seleccionado(s)?"
+        )
+        if not confirmar:
+            return
+
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        for item in seleccion:
+            valores = self.tre.item(item, "values")
+            id_registro = valores[0]  # La primera columna es ID
+            cursor.execute("DELETE FROM inventario WHERE id = ?", (id_registro,))
+
+        conn.commit()
+        conn.close()
+
+        # Quitar del Treeview
+        for item in seleccion:
+            self.tre.delete(item)
+
+        # Preguntar si reenumerar IDs para eliminar huecos (ATENCIÓN: esto cambia ids y rompe FK si existen)
+        reenumerar = messagebox.askyesno(
+            "Reenumerar IDs",
+            "¿Desea reenumerar los IDs para eliminar los huecos dejados por los registros borrados?\n"
+            "Esto reasignará nuevos IDs consecutivos (1,2,3...) y puede romper referencias si otras tablas usan estos IDs."
+        )
+        if reenumerar:
+            try:
+                self.resequence_inventario()
+                self.actualizar_inventario()
+                messagebox.showinfo("Reenumerar", "IDs reenumerados correctamente.")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo reenumerar: {e}")
+
+        messagebox.showinfo("Éxito", "Registro(s) eliminado(s).")
+
+    def resequence_inventario(self):
+        """
+        Reconstruye la tabla inventario para reasignar ids consecutivos.
+        ADVERTENCIA: si otras tablas referencian inventario.id, esas referencias quedarán inválidas.
+        """
+        conn = sqlite3.connect(self.db_name)
+        cur = conn.cursor()
+        try:
+            cur.execute("PRAGMA foreign_keys = OFF;")
+            conn.commit()
+
+            # Crear tabla temporal con misma estructura
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS inventario_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    codigo_barra TEXT UNIQUE,
+                    nombre TEXT NOT NULL,
+                    proveedor TEXT NOT NULL,
+                    precio REAL NOT NULL,
+                    costo REAL NOT NULL,
+                    stock INTEGER NOT NULL
+                );
+            """)
+            # Copiar datos sin el id para que se reasignen secuencialmente
+            cur.execute("""
+                INSERT INTO inventario_new (codigo_barra, nombre, proveedor, precio, costo, stock)
+                SELECT codigo_barra, nombre, proveedor, precio, costo, stock
+                FROM inventario
+                ORDER BY id;
+            """)
+            # Borrar tabla antigua y renombrar la nueva
+            cur.execute("DROP TABLE inventario;")
+            cur.execute("ALTER TABLE inventario_new RENAME TO inventario;")
+
+            # Reiniciar sqlite_sequence por si acaso
+            cur.execute("DELETE FROM sqlite_sequence WHERE name = ?", ("inventario",))
+            conn.commit()
+        finally:
+            cur.execute("PRAGMA foreign_keys = ON;")
+            conn.commit()
+            conn.close()
 
     def editar_producto(self):
         seleccion = self.tre.selection()

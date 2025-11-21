@@ -49,5 +49,5 @@ class Container(tk.Frame):
         self.logo_label = tk.Label(frame1, image = self.logo_image, bg="#c6d9e3")
         self.logo_label.place(x=100, y=30)
 
-        copyright_label = tk.Label(frame1, text="© 2025 Codemi. Todos los derechos reservados", font="sans 12 bold", bg="#c6d9e3", fg="gray")
+        copyright_label = tk.Label(frame1, text="© 2025 Maidana Emiliano & Zorzoli Ariel. Todos los derechos reservados", font="sans 12 bold", bg="#c6d9e3", fg="gray")
         copyright_label.place(x=180, y=350)

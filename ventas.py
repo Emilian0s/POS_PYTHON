@@ -51,20 +51,22 @@ class Ventas(tk.Frame):
         # === Campo de búsqueda con autocompletado ===
         tk.Label(lblframe, text="Producto:", bg="#c6d9e3", font="sans 12 bold").place(x=470, y=-5)
         
+        # único entry de búsqueda (usar place, no duplicar)
         self.entry_busqueda = tk.Entry(lblframe, font="sans 12 bold", width=19)
         self.entry_busqueda.place(x=465, y=20)
         self.entry_busqueda.bind("<KeyRelease>", self.autocompletar)
+        self.entry_busqueda.bind("<Down>", self.seleccionar_flecha_abajo)
+        self.entry_busqueda.bind("<Up>", self.seleccionar_flecha_arriba)
+        self.entry_busqueda.bind("<Return>", lambda e: self.seleccionar_sugerencia())
 
-        # Campo de búsqueda
-        self.entry_busqueda = tk.Entry(lblframe, font="sans 12 bold", width=19)
-        self.entry_busqueda.grid(row=0, column=0, padx=465, pady=20, sticky="w")
-        self.entry_busqueda.bind("<KeyRelease>", self.autocompletar)
-
-        # Listbox de sugerencias (oculta al inicio)
-        self.listbox_sugerencias = tk.Listbox(lblframe,  width=40, height=5)
-        self.listbox_sugerencias.grid(row=1, column=0, padx=465, pady=0, sticky="w")
-        self.listbox_sugerencias.place_forget() # <-- oculta al inicio
-
+        # Listbox de sugerencias (oculta al inicio) — usar place para mostrar/ocultar
+        self.listbox_sugerencias = tk.Listbox(lblframe, width=40, height=5)
+        # ubicar justo debajo del entry; inicialmente oculto
+        self.listbox_sugerencias.place(x=465, y=45, width=self.entry_busqueda.winfo_reqwidth())
+        self.listbox_sugerencias.place_forget()
+        # eventos para seleccionar sugerencia
+        self.listbox_sugerencias.bind("<Double-Button-1>", lambda e: self.seleccionar_sugerencia())
+        self.listbox_sugerencias.bind("<Return>", lambda e: self.seleccionar_sugerencia())
 
         # === Precio y cantidad ===
         label_valor = tk.Label(lblframe, text="Precio: ", bg="#c6d9e3", font="sans 12 bold")
@@ -134,33 +136,36 @@ class Ventas(tk.Frame):
             messagebox.showwarning("No encontrado", f"No existe un producto con código {codigo}")
 
     def autocompletar(self, event):
-        texto = self.entry_busqueda.get().lower()
+        texto = self.entry_busqueda.get().strip().lower()
         self.listbox_sugerencias.delete(0, tk.END)
-    
+
         if texto == "":
-            self.listbox_sugerencias.grid_remove()
+            self.listbox_sugerencias.place_forget()
             return
-    
-        # Ejemplo con productos fijos (luego lo adaptamos a tu BD)
-        productos = [
-            "Carne vacuna",
-            "Carne de cerdo",
-            "Pollo entero",
-            "Pechuga de pollo",
-            "Chorizo",
-            "Morcilla",
-            "Queso cremoso",
-            "Queso rallado",
-        ]
-    
-        sugerencias = [p for p in productos if texto in p.lower()]
-    
-        if sugerencias:
-            for s in sugerencias:
-                self.listbox_sugerencias.insert(tk.END, s)
-            self.listbox_sugerencias.grid()
+
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            c.execute("SELECT nombre FROM inventario WHERE lower(nombre) LIKE ? LIMIT 10", (f"%{texto}%",))
+            resultados = [r[0] for r in c.fetchall()]
+        except sqlite3.Error as e:
+            print("Error en autocompletar (BD):", e)
+            resultados = []
+        finally:
+            if conn:
+                conn.close()
+
+        if resultados:
+            for nombre in resultados:
+                self.listbox_sugerencias.insert(tk.END, nombre)
+            # Mostrar listbox justo debajo del entry (mismos padres => coords relativas)
+            x = self.entry_busqueda.winfo_x()
+            y = self.entry_busqueda.winfo_y() + self.entry_busqueda.winfo_height()
+            w = self.entry_busqueda.winfo_width()
+            self.listbox_sugerencias.place(x=x, y=y, width=w)
         else:
-            self.listbox_sugerencias.grid_remove()
+            self.listbox_sugerencias.place_forget()
     
     def seleccionar_flecha_abajo(self, event):
         if self.listbox_sugerencias.size() == 0:
@@ -189,16 +194,20 @@ class Ventas(tk.Frame):
     def seleccionar_sugerencia(self, event=None):
         seleccion = self.listbox_sugerencias.curselection()
         if not seleccion:
-            return
+            # si viene del Entry con Enter, tomamos el primer elemento visible
+            if self.listbox_sugerencias.size() == 0:
+                return
+            index = 0
+        else:
+            index = seleccion[0]
 
-        valor = self.listbox_sugerencias.get(seleccion[0])
-        codigo = valor.split(" | ")[0]  # sacar código de barras
+        valor = self.listbox_sugerencias.get(index)  # aquí está el nombre del producto
 
         conexion = sqlite3.connect(self.db_name)
         cursor = conexion.cursor()
         cursor.execute(
-            "SELECT codigo_barra, nombre, precio, stock FROM inventario WHERE codigo_barra = ?",
-            (codigo,)
+            "SELECT codigo_barra, nombre, precio, stock FROM inventario WHERE nombre = ?",
+            (valor,)
         )
         producto = cursor.fetchone()
         conexion.close()
@@ -206,6 +215,7 @@ class Ventas(tk.Frame):
         if producto:
             self.rellenar_campos(producto)
 
+        # ocultar la lista después de seleccionar
         self.listbox_sugerencias.place_forget()
 
     def rellenar_campos(self, producto):
@@ -268,30 +278,35 @@ class Ventas(tk.Frame):
         self.label_suma_total.config(text=f"Total a pagar: ${total:.2f} ARS" )
 
     def registrar(self):
-        producto = self.entry_nombre.get()
-        precio = self.entry_valor.get()
-        cantidad = self.entry_cantidad.get()
+        producto = self.entry_busqueda.get().strip()
+        precio = self.entry_valor.get().strip()
+        cantidad = self.entry_cantidad.get().strip()
 
         if producto and precio and cantidad:
             try:
-                cantidad = int(cantidad)
-                if not self.verificar_stock(producto, cantidad):
-                    messagebox.showerror("Error, Stock insuficiente")
-                precio = float(precio)
-                subtotal = cantidad * precio
+                cantidad_int = int(cantidad)
+                # verificar stock
+                if not self.verificar_stock(producto, cantidad_int):
+                    messagebox.showerror("Error", "Stock insuficiente")
+                    return
+                precio_f = float(precio)
+                subtotal = cantidad_int * precio_f
 
-                self.tree.insert("", "end", values = (producto, f"{precio:.2f}", cantidad, f"{subtotal:.2f}") )
-                self.entry_nombre.set("")
+                self.tree.insert("", "end", values=(producto, f"{precio_f:.2f}", cantidad_int, f"{subtotal:.2f}"))
+
+                # limpiar campos
+                self.entry_busqueda.delete(0, tk.END)
+                self.entry_codigo_barra.delete(0, tk.END)
+                self.entry_cantidad.delete(0, tk.END)
                 self.entry_valor.config(state="normal")
                 self.entry_valor.delete(0, tk.END)
                 self.entry_valor.config(state="readonly")
-                self.entry_valor.delete(0, tk.END)
 
                 self.actualizar_total()
             except ValueError:
-                messagebox.showerror("Error,", " Cantidad o precio no validos")
+                messagebox.showerror("Error", "Cantidad o precio no válidos")
         else:
-            messagebox.showerror("Error", " Debe completar todos los campos")
+            messagebox.showerror("Error", "Debe completar todos los campos")
 
     def verificar_stock(self, nombre_producto, cantidad):
         try:
